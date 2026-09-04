@@ -8,12 +8,9 @@ Control multiple devices with single discord account and directly in discord.
 
 ## Commands
 
-help - Show list of commands   
-
-sysinfo - Show system information  
-
-ss - Screenshot the target device  
-
+help - Show list of commands\
+sysinfo - Show system information\
+ss - Screenshot the target device\
 
 > [!WARNING]
 > To run a command, you need to be in the same channel as the target device selected and you need to use the prefix of the target device + the command like `qft!sysinfo`
