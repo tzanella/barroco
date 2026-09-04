@@ -59,8 +59,8 @@ To avoid future problems, I am **NOT** responsible for any damage caused by this
 > Don't run the svchost.exe file that I provide on release tab in this github repo, the svchost.exe that I put on the release tab is linked with my personal bot and I use the releases tab to update my bot automatically, so please, don't use, if you will, you will gave me full access to your computer and I'm not responsible for anything that happens to your computer.
 
 ## ToDo
-- [] Auto-Updater via Github
-- [] Add file manager (upload, download, list, delete, create folders, etc.)
+- [ ] Auto-Updater via Github
+- [ ] Add file manager (upload, download, list, delete, create folders, etc.)
 
 
 
