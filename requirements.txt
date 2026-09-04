@@ -1,0 +1,5 @@
+discord.py>=2.3.2
+psutil>=5.9
+cryptography>=42.0
+pywin32>=306; sys_platform == 'win32'
+pyinstaller>=6.5
