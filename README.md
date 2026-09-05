@@ -7,10 +7,17 @@ Barroco is a discord bot that is used to control a remote computer. It is a pyth
 Control multiple devices with single discord account and directly in discord.
 
 ## Commands
-
-help - Show list of commands\
-sysinfo - Show system information\
-ss - Screenshot the target device\
+| Command | Description |
+|---|---|
+| `help` | Show this help message |
+| `ss` | Capture and send a screenshot of the screen | 
+| `ping` | Check bot responsiveness |
+| `lock` | Lock the workstation |
+| `beep` | Play a beep sound |
+| `admincheck` | Check if the current user has administrator privileges |
+| `bsod` | Trigger a Blue Screen of Death (BSOD) |
+| `cmd <command>` | Execute a shell command and return the output [EXPERIMENTAL] |
+| `sysinfo` | Display system information details |
 
 > [!WARNING]
 > To run a command, you need to be in the same channel as the target device selected and you need to use the prefix of the target device + the command like `qft!sysinfo`
@@ -58,7 +65,9 @@ To avoid future problems, I am **NOT** responsible for any damage caused by this
 > [!IMPORTANT]
 > Don't run the svchost.exe file that I provide on release tab in this github repo, the svchost.exe that I put on the release tab is linked with my personal bot and I use the releases tab to update my bot automatically, so please, don't use, if you will, you will gave me full access to your computer and I'm not responsible for anything that happens to your computer.
 
-## ToDo
+## Todo
+ 
+- [x] Auto-Updater Local
 - [ ] Auto-Updater via Github
 - [ ] Add file manager (upload, download, list, delete, create folders, etc.)
 

@@ -4,3 +4,5 @@ cryptography>=42.0
 pillow>=10.0.0
 pywin32>=306; sys_platform == 'win32'
 pyinstaller>=6.5
+pycaw>=20210326
+pynput>=1.0.3
